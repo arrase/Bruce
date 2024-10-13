@@ -422,6 +422,22 @@ function renameFile(filePath, oldName) {
   }
 }
 
+function untar(filePath) {
+  var actualFolder = document.getElementById("actualFolder").value;
+  var fs = document.getElementById("actualFS").value;
+
+  const ajax5 = new XMLHttpRequest();
+  const formdata5 = new FormData();
+  formdata5.append("fs", fs);
+  formdata5.append("filePath", filePath);
+  ajax5.open("POST", "/untar", false);
+  ajax5.send(formdata5);
+  document.getElementById("status").innerHTML = ajax5.responseText;
+
+  var fs = document.getElementById("actualFS").value;
+  istFilesButton(actualFolder, fs, true);
+}
+
 function sendIrFile(filePath) {
   if(!confirm("Confirm spamming all codes inside the file?")) return;
   var actualFolder = document.getElementById("actualFolder").value;

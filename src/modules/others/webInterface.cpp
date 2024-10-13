@@ -7,7 +7,7 @@
 #include "core/passwords.h"
 #include "core/settings.h"
 #include "webInterface.h"
-
+#include <ESP32-targz.h>
 
 File uploadFile;
   // WiFi as a Client
@@ -128,6 +128,7 @@ String listFiles(FS fs, bool ishtml, String folder, bool isLittleFS) {
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("ir")) returnText+= "<i class=\"gg-data\" onclick=\"sendIrFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("js")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("bjs")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
+        if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("gz")) returnText+= "<i class=\"gg-data\" onclick=\"untar(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";      
         #if defined(USB_as_HID)
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("txt")) returnText+= "<i class=\"gg-data\" onclick=\"runBadusbFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("enc")) returnText+= "<i class=\"gg-data\" onclick=\"decryptAndType(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
@@ -364,6 +365,88 @@ server->on("/script.js", HTTP_GET, []() {
         else server->send(200, "text/plain", "Fail renaming file.");
       }
 
+    }
+  });
+
+  server->on("/untar", HTTP_POST, []() {
+    if (server->hasArg("filePath"))  {
+      String fs = server->arg("fs").c_str();
+      String filePath = server->arg("filePath").c_str();
+      if(fs == "SD") {
+        if (SD.exists(filePath)) {
+          // Abre el archivo .tar.gz
+          Targz tgz;
+          if (tgz.open(filePath, O_RDONLY)) {
+            // Itera a través de los archivos en el archivo .tar.gz
+            while (tgz.next()) {
+              // Obtén el nombre del archivo actual
+              String fileName = tgz.fileName();
+              // Crea el archivo en el sistema de archivos
+              File file = SD.open(fileName, FILE_WRITE);
+              if (file) {
+                // Escribe los datos del archivo en el sistema de archivos
+                uint8_t buffer[512];
+                int bytesRead;
+                while ((bytesRead = tgz.read(buffer, sizeof(buffer))) > 0) {
+                  file.write(buffer, bytesRead);
+                }
+                file.close();
+              } else {
+                // Error al crear el archivo
+                server->send(200, "text/plain", "Error creating file");
+                return;
+              }
+            }
+            // Cierra el archivo .tar.gz
+            tgz.close();
+            // Envía una respuesta exitosa
+            server->send(200, "text/plain", "File unzipped successfully");
+          } else {
+            // Error al abrir el archivo .tar.gz
+            server->send(200, "text/plain", "Error opening file");
+          }
+        } else {
+          // Archivo no encontrado
+          server->send(200, "text/plain", "File not found");
+        }
+      } else {
+        if (LittleFS.exists(filePath)) {
+          // Abre el archivo .tar.gz
+          Targz tgz;
+          if (tgz.open(filePath, O_RDONLY)) {
+            // Itera a través de los archivos en el archivo .tar.gz
+            while (tgz.next()) {
+              // Obtén el nombre del archivo actual
+              String fileName = tgz.fileName();
+              // Crea el archivo en el sistema de archivos
+              File file = LittleFS.open(fileName, FILE_WRITE);
+              if (file) {
+                // Escribe los datos del archivo en el sistema de archivos
+                uint8_t buffer[512];
+                int bytesRead;
+                while ((bytesRead = tgz.read(buffer, sizeof(buffer))) > 0) {
+                  file.write(buffer, bytesRead);
+                }
+                file.close();
+              } else {
+                // Error al crear el archivo
+                server->send(200, "text/plain", "Error creating file");
+                return;
+              }
+            }
+            // Cierra el archivo .tar.gz
+            tgz.close();
+            // Envía una respuesta exitosa
+            server->send(200, "text/plain", "File unzipped successfully");
+          } else {
+            // Error al abrir el archivo .tar.gz
+            server->send(200, "text/plain", "Error opening file");
+          }
+        } else {
+          // Archivo no encontrado
+          server->send(200, "text/plain", "File not found");
+        }
+      }
     }
   });
 
