@@ -7,7 +7,7 @@
 #include "core/passwords.h"
 #include "core/settings.h"
 #include "webInterface.h"
-#include <miniz.h>
+#include "miniz.h"
 
 File uploadFile;
   // WiFi as a Client
@@ -128,7 +128,7 @@ String listFiles(FS fs, bool ishtml, String folder, bool isLittleFS) {
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("ir")) returnText+= "<i class=\"gg-data\" onclick=\"sendIrFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("js")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("bjs")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
-        if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("zip")) returnText+= "<i class=\"gg-data\" onclick=\"unzip(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";      
+        if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("bjs")) returnText+= "<i class=\"gg-data\" onclick=\"unzip(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         #if defined(USB_as_HID)
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("txt")) returnText+= "<i class=\"gg-data\" onclick=\"runBadusbFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("enc")) returnText+= "<i class=\"gg-data\" onclick=\"decryptAndType(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
@@ -368,7 +368,7 @@ server->on("/script.js", HTTP_GET, []() {
     }
   });
 
-  server->on("/unzip", HTTP_POST, []() {
+    server->on("/unzip", HTTP_POST, []() {
     if (server->hasArg("filePath"))  {
       String fs = server->arg("fs").c_str();
       String zipFilePath = server->arg("filePath").c_str();
@@ -455,6 +455,111 @@ server->on("/script.js", HTTP_GET, []() {
       free(zipBuffer);
 
       Serial.println("Descompresión completada");
+    }
+  });
+
+  // Route to send an generic command (Tasmota compatible API) https://tasmota.github.io/docs/Commands/#with-web-requests
+  server->on("/cm", HTTP_POST, []() {
+    if (server->hasArg("cmnd"))  {
+      String cmnd = server->arg("cmnd");
+      if( processSerialCommand( cmnd ) ) {
+        setup_gpio(); // temp fix for menu inf. loop
+        drawWebUiScreen(WiFi.getMode() == WIFI_MODE_AP ? true:false);
+        server->send(200, "text/plain", "command " + cmnd + " success");
+      } else {
+        server->send(400, "text/plain", "command failed, check the serial log for details");
+      }
+    }
+    server->send(400, "text/plain", "http request missing required arg: cmnd");
+  });
+
+  // Reinicia o ESP
+  server->on("/reboot", HTTP_GET, []() {
+    if (checkUserWebAuth()) {
+      ESP.restart();
+    } else {
+      server->requestAuthentication();
+    }
+  });
+
+  // List files of the LittleFS
+  server->on("/listfiles", HTTP_GET, []() {
+    if (checkUserWebAuth()) {
+      String folder = "/";
+      if (server->hasArg("folder")) {
+        folder = server->arg("folder");
+      }
+      bool useSD = false;
+      if (strcmp(server->arg("fs").c_str(), "SD") == 0) useSD = true;
+
+      if (useSD) server->send(200, "text/plain", listFiles(SD, true, folder,false));
+      else server->send(200, "text/plain", listFiles(LittleFS, true, folder, true));
+
+    } else {
+      server->requestAuthentication();
+    }
+  });
+
+  // define route to handle download, create folder and delete
+  server->on("/file", HTTP_GET, []() {
+    if (checkUserWebAuth()) {
+      if (server->hasArg("name") && server->hasArg("action")) {
+        String fileName = server->arg("name").c_str();
+        String fileAction = server->arg("action").c_str();
+        String fileSys = server->arg("fs").c_str();
+        bool useSD = false;
+        if (fileSys == "SD") useSD = true;
+
+        FS *fs;
+        if (useSD) fs = &SD;
+        else fs = &LittleFS;
+
+        log_i("filename: %s", fileName);
+        log_i("fileAction: %s", fileAction);
+
+        if (!(*fs).exists(fileName)) {
+          if (strcmp(fileAction.c_str(), "create") == 0) {
+            if ((*fs).mkdir(fileName)) {
+              server->send(200, "text/plain", "Created new folder: " + String(fileName));
+            } else {
+              server->send(200, "text/plain", "FAIL creating folder: " + String(fileName));
+            }
+          } else server->send(400, "text/plain", "ERROR: file does not exist");
+
+        } else {
+          if (strcmp(fileAction.c_str(), "download") == 0) {
+            File downloadFile = (*fs).open(fileName, FILE_READ);
+            if (downloadFile) {
+              String contentType = "application/octet-stream";
+              server->setContentLength(downloadFile.size());
+              server->sendHeader("Content-Type", contentType, true);
+              server->sendHeader("Content-Disposition", "attachment; filename=\"" + String(downloadFile.name()) + "\"");
+              server->streamFile(downloadFile, contentType);
+              downloadFile.close();
+            } else {
+              server->send(500, "text/plain", "Failed to open file for reading");
+            }
+          } else if (strcmp(fileAction.c_str(), "delete") == 0) {
+            if (deleteFromSd(*fs, fileName)) {
+              server->send(200, "text/plain", "Deleted : " + String(fileName));
+            } else {
+              server->send(200, "text/plain", "FAIL deleting: " + String(fileName));
+            }
+          } else if (strcmp(fileAction.c_str(), "create") == 0) {
+            if (SD.mkdir(fileName)) {
+              server->send(200, "text/plain", "Created new folder: " + String(fileName));
+            } else {
+              server->send(200, "text/plain", "FAIL creating folder: " + String(fileName));
+            }
+          } else {
+            server->send(400, "text/plain", "ERROR: invalid action param supplied");
+          }
+        }
+      } else {
+        server->send(400, "text/plain", "ERROR: name and action params required");
+      }
+    } else {
+      server->requestAuthentication();
     }
   });
 
