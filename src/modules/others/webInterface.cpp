@@ -7,7 +7,7 @@
 #include "core/passwords.h"
 #include "core/settings.h"
 #include "webInterface.h"
-#include <ESP32-targz.h>
+#include <miniz.h>
 
 File uploadFile;
   // WiFi as a Client
@@ -128,7 +128,7 @@ String listFiles(FS fs, bool ishtml, String folder, bool isLittleFS) {
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("ir")) returnText+= "<i class=\"gg-data\" onclick=\"sendIrFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("js")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
         if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("bjs")) returnText+= "<i class=\"gg-data\" onclick=\"runJsFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
-        if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("gz")) returnText+= "<i class=\"gg-data\" onclick=\"untar(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";      
+        if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("zip")) returnText+= "<i class=\"gg-data\" onclick=\"unzip(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";      
         #if defined(USB_as_HID)
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("txt")) returnText+= "<i class=\"gg-data\" onclick=\"runBadusbFile(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
           if (String(foundfile.name()).substring(String(foundfile.name()).lastIndexOf('.') + 1).equalsIgnoreCase("enc")) returnText+= "<i class=\"gg-data\" onclick=\"decryptAndType(\'" + String(foundfile.path()) + "\')\"></i>&nbsp&nbsp\n";
@@ -368,190 +368,93 @@ server->on("/script.js", HTTP_GET, []() {
     }
   });
 
-  server->on("/untar", HTTP_POST, []() {
+  server->on("/unzip", HTTP_POST, []() {
     if (server->hasArg("filePath"))  {
       String fs = server->arg("fs").c_str();
-      String filePath = server->arg("filePath").c_str();
+      String zipFilePath = server->arg("filePath").c_str();
+      File zipFile;
+
       if(fs == "SD") {
-        if (SD.exists(filePath)) {
-          // Abre el archivo .tar.gz
-          Targz tgz;
-          if (tgz.open(filePath, O_RDONLY)) {
-            // Itera a través de los archivos en el archivo .tar.gz
-            while (tgz.next()) {
-              // Obtén el nombre del archivo actual
-              String fileName = tgz.fileName();
-              // Crea el archivo en el sistema de archivos
-              File file = SD.open(fileName, FILE_WRITE);
-              if (file) {
-                // Escribe los datos del archivo en el sistema de archivos
-                uint8_t buffer[512];
-                int bytesRead;
-                while ((bytesRead = tgz.read(buffer, sizeof(buffer))) > 0) {
-                  file.write(buffer, bytesRead);
-                }
-                file.close();
-              } else {
-                // Error al crear el archivo
-                server->send(200, "text/plain", "Error creating file");
-                return;
-              }
-            }
-            // Cierra el archivo .tar.gz
-            tgz.close();
-            // Envía una respuesta exitosa
-            server->send(200, "text/plain", "File unzipped successfully");
-          } else {
-            // Error al abrir el archivo .tar.gz
-            server->send(200, "text/plain", "Error opening file");
-          }
-        } else {
-          // Archivo no encontrado
-          server->send(200, "text/plain", "File not found");
-        }
+        zipFile = SD.open(zipFilePath, FILE_READ);
       } else {
-        if (LittleFS.exists(filePath)) {
-          // Abre el archivo .tar.gz
-          Targz tgz;
-          if (tgz.open(filePath, O_RDONLY)) {
-            // Itera a través de los archivos en el archivo .tar.gz
-            while (tgz.next()) {
-              // Obtén el nombre del archivo actual
-              String fileName = tgz.fileName();
-              // Crea el archivo en el sistema de archivos
-              File file = LittleFS.open(fileName, FILE_WRITE);
-              if (file) {
-                // Escribe los datos del archivo en el sistema de archivos
-                uint8_t buffer[512];
-                int bytesRead;
-                while ((bytesRead = tgz.read(buffer, sizeof(buffer))) > 0) {
-                  file.write(buffer, bytesRead);
-                }
-                file.close();
-              } else {
-                // Error al crear el archivo
-                server->send(200, "text/plain", "Error creating file");
-                return;
-              }
-            }
-            // Cierra el archivo .tar.gz
-            tgz.close();
-            // Envía una respuesta exitosa
-            server->send(200, "text/plain", "File unzipped successfully");
-          } else {
-            // Error al abrir el archivo .tar.gz
-            server->send(200, "text/plain", "Error opening file");
+        zipFile = SPIFFS.open(zipFilePath, FILE_READ);
+      }
+      
+      if (!zipFile) {
+          Serial.println("Error al abrir el archivo ZIP");
+          return;
+      }
+
+      // Leer el contenido del archivo ZIP en un buffer
+      size_t zipSize = zipFile.size();
+      uint8_t* zipBuffer = (uint8_t*)malloc(zipSize);
+      if (!zipBuffer) {
+          Serial.println("Error al reservar memoria");
+          zipFile.close();
+          return;
+      }
+      zipFile.read(zipBuffer, zipSize);
+      zipFile.close();
+
+      // Inicializar el archivo ZIP usando miniz
+      mz_zip_archive zip_archive;
+      memset(&zip_archive, 0, sizeof(zip_archive));
+
+      if (!mz_zip_reader_init_mem(&zip_archive, zipBuffer, zipSize, 0)) {
+          Serial.println("Error al inicializar el archivo ZIP");
+          free(zipBuffer);
+          return;
+      }
+
+      // Obtener el número de archivos en el archivo ZIP
+      int numFiles = mz_zip_reader_get_num_files(&zip_archive);
+      Serial.printf("Número de archivos en el ZIP: %d\n", numFiles);
+
+      // Descomprimir cada archivo del ZIP
+      for (int i = 0; i < numFiles; i++) {
+          mz_zip_archive_file_stat file_stat;
+          if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) {
+              Serial.println("Error al obtener información del archivo en el ZIP");
+              continue;
           }
-        } else {
-          // Archivo no encontrado
-          server->send(200, "text/plain", "File not found");
-        }
-      }
-    }
-  });
 
-  // Route to send an generic command (Tasmota compatible API) https://tasmota.github.io/docs/Commands/#with-web-requests
-  server->on("/cm", HTTP_POST, []() {
-    if (server->hasArg("cmnd"))  {
-      String cmnd = server->arg("cmnd");
-      if( processSerialCommand( cmnd ) ) {
-        setup_gpio(); // temp fix for menu inf. loop
-        drawWebUiScreen(WiFi.getMode() == WIFI_MODE_AP ? true:false);
-        server->send(200, "text/plain", "command " + cmnd + " success");
-      } else {
-        server->send(400, "text/plain", "command failed, check the serial log for details");
-      }
-    }
-    server->send(400, "text/plain", "http request missing required arg: cmnd");
-  });
-
-  // Reinicia o ESP
-  server->on("/reboot", HTTP_GET, []() {
-    if (checkUserWebAuth()) {
-      ESP.restart();
-    } else {
-      server->requestAuthentication();
-    }
-  });
-
-  // List files of the LittleFS
-  server->on("/listfiles", HTTP_GET, []() {
-    if (checkUserWebAuth()) {
-      String folder = "/";
-      if (server->hasArg("folder")) {
-        folder = server->arg("folder");
-      }
-      bool useSD = false;
-      if (strcmp(server->arg("fs").c_str(), "SD") == 0) useSD = true;
-
-      if (useSD) server->send(200, "text/plain", listFiles(SD, true, folder,false));
-      else server->send(200, "text/plain", listFiles(LittleFS, true, folder, true));
-
-    } else {
-      server->requestAuthentication();
-    }
-  });
-
-  // define route to handle download, create folder and delete
-  server->on("/file", HTTP_GET, []() {
-    if (checkUserWebAuth()) {
-      if (server->hasArg("name") && server->hasArg("action")) {
-        String fileName = server->arg("name").c_str();
-        String fileAction = server->arg("action").c_str();
-        String fileSys = server->arg("fs").c_str();
-        bool useSD = false;
-        if (fileSys == "SD") useSD = true;
-
-        FS *fs;
-        if (useSD) fs = &SD;
-        else fs = &LittleFS;
-
-        log_i("filename: %s", fileName);
-        log_i("fileAction: %s", fileAction);
-
-        if (!(*fs).exists(fileName)) {
-          if (strcmp(fileAction.c_str(), "create") == 0) {
-            if ((*fs).mkdir(fileName)) {
-              server->send(200, "text/plain", "Created new folder: " + String(fileName));
-            } else {
-              server->send(200, "text/plain", "FAIL creating folder: " + String(fileName));
-            }
-          } else server->send(400, "text/plain", "ERROR: file does not exist");
-
-        } else {
-          if (strcmp(fileAction.c_str(), "download") == 0) {
-            File downloadFile = (*fs).open(fileName, FILE_READ);
-            if (downloadFile) {
-              String contentType = "application/octet-stream";
-              server->setContentLength(downloadFile.size());
-              server->sendHeader("Content-Type", contentType, true);
-              server->sendHeader("Content-Disposition", "attachment; filename=\"" + String(downloadFile.name()) + "\"");
-              server->streamFile(downloadFile, contentType);
-              downloadFile.close();
-            } else {
-              server->send(500, "text/plain", "Failed to open file for reading");
-            }
-          } else if (strcmp(fileAction.c_str(), "delete") == 0) {
-            if (deleteFromSd(*fs, fileName)) {
-              server->send(200, "text/plain", "Deleted : " + String(fileName));
-            } else {
-              server->send(200, "text/plain", "FAIL deleting: " + String(fileName));
-            }
-          } else if (strcmp(fileAction.c_str(), "create") == 0) {
-            if (SD.mkdir(fileName)) {
-              server->send(200, "text/plain", "Created new folder: " + String(fileName));
-            } else {
-              server->send(200, "text/plain", "FAIL creating folder: " + String(fileName));
-            }
-          } else {
-            server->send(400, "text/plain", "ERROR: invalid action param supplied");
+          // Leer contenido del archivo
+          size_t uncomp_size;
+          void* p = mz_zip_reader_extract_file_to_heap(&zip_archive, file_stat.m_filename, &uncomp_size, 0);
+          if (!p) {
+              Serial.printf("Error al descomprimir el archivo: %s\n", file_stat.m_filename);
+              continue;
           }
-        }
-      } else {
-        server->send(400, "text/plain", "ERROR: name and action params required");
+
+          Serial.printf("Archivo: %s, Tamaño descomprimido: %d bytes\n", file_stat.m_filename, uncomp_size);
+
+          // Puedes guardar el contenido descomprimido en SPIFFS, o manejarlo según sea necesario
+          // Guardar en SPIFFS:
+          File outFile;
+          if(fs == "SD") {
+            outFile = SD.open(file_stat.m_filename, FILE_WRITE);
+          } else {
+            outFile = SPIFFS.open(file_stat.m_filename, FILE_WRITE);
+          }
+
+          if (outFile) {
+              outFile.write((const uint8_t*)p, uncomp_size);
+              outFile.close();
+          } else {
+              Serial.printf("Error al crear archivo descomprimido: %s\n", file_stat.m_filename);
+          }
+
+          // Liberar memoria utilizada
+          mz_free(p);
       }
-    } else {
-      server->requestAuthentication();
+
+      // Finalizar la lectura del archivo ZIP
+      mz_zip_reader_end(&zip_archive);
+
+      // Liberar el buffer ZIP
+      free(zipBuffer);
+
+      Serial.println("Descompresión completada");
     }
   });
 
