@@ -422,7 +422,7 @@ function renameFile(filePath, oldName) {
   }
 }
 
-function untar(filePath) {
+function unzip(filePath) {
   var actualFolder = document.getElementById("actualFolder").value;
   var fs = document.getElementById("actualFS").value;
 
@@ -430,7 +430,7 @@ function untar(filePath) {
   const formdata5 = new FormData();
   formdata5.append("fs", fs);
   formdata5.append("filePath", filePath);
-  ajax5.open("POST", "/untar", false);
+  ajax5.open("POST", "/unzip", false);
   ajax5.send(formdata5);
   document.getElementById("status").innerHTML = ajax5.responseText;
 
